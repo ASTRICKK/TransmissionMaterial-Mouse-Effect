@@ -25,6 +25,10 @@ import {
   vorticityShaderSource,
   pressureShaderSource,
   gradientSubtractShaderSource,
+  vpFullscreenVertSource,
+  vpPaintShaderSource,
+  vpDistortionShaderSource,
+  vpBlurShaderSource,
 } from './shaders';
 
 // ── Types ──────────────────────────────────────────────────
@@ -78,20 +82,23 @@ export interface FluidConfig {
   TRANSMISSION2_FRESNEL_POWER: number;
   TRANSMISSION2_FRESNEL_INTENSITY: number;
   TRANSMISSION2_LIGHTING: boolean;
-  TRANSMISSION3: boolean;
-  TRANSMISSION3_IOR: number;
-  TRANSMISSION3_THICKNESS: number;
-  TRANSMISSION3_CA_SPREAD: number;
-  TRANSMISSION3_CA_INTENSITY: number;
-  TRANSMISSION3_CA_EDGE_WIDTH: number;
-  TRANSMISSION3_GRAD_AMP: number;
-  TRANSMISSION3_ROUGHNESS: number;
-  TRANSMISSION3_CAUSTIC_INT: number;
-  TRANSMISSION3_SPEC_POWER: number;
-  TRANSMISSION3_SPEC_INTENSITY: number;
-  TRANSMISSION3_FRESNEL_POWER: number;
-  TRANSMISSION3_FRESNEL_INTENSITY: number;
-  TRANSMISSION3_LIGHTING: boolean;
+  VP1_ENABLED: boolean;
+  VP1_PUSH_STRENGTH: number;
+  VP1_VELOCITY_DISSIPATION: number;
+  VP1_WEIGHT1_DISSIPATION: number;
+  VP1_WEIGHT2_DISSIPATION: number;
+  VP1_ACCEL_DISSIPATION: number;
+  VP1_USE_NOISE: boolean;
+  VP1_CURL_SCALE: number;
+  VP1_CURL_STRENGTH: number;
+  VP1_MIN_RADIUS: number;
+  VP1_MAX_RADIUS: number;
+  VP1_RADIUS_RANGE: number;
+  VP1_DISTORTION_AMOUNT: number;
+  VP1_RGB_SHIFT: number;
+  VP1_DISTORTION_MULTIPLIER: number;
+  VP1_COLOR_MULTIPLIER: number;
+  VP1_SHADE: number;
   VELOCITY_SPLAT: boolean;
   VELOCITY_MAX_RADIUS: number;
   VELOCITY_SENSITIVITY: number;
@@ -374,6 +381,27 @@ export class FluidSimulation {
   private animFrameId = 0;
   private _destroyed = false;
 
+  // ── VelocityPaint1 (Lusion ScreenPaint clone) ──────────
+  private vp1PrevPaintFBO!: FBO;
+  private vp1CurrPaintFBO!: FBO;
+  private vp1LowFBO!: FBO;
+  private vp1LowBlurFBO!: FBO;
+  private vp1TempFBO!: FBO;  // for distortion pass (scene copy)
+  private vp1PaintProgram!: GLProgram;
+  private vp1DistortionProgram!: GLProgram;
+  private vp1BlurProgram!: GLProgram;
+  private vp1CopyProgram!: GLProgram;
+  // VP1 mouse tracking state
+  private vp1FromDrawData = { x: 0, y: 0, z: 0, w: 0 };
+  private vp1ToDrawData = { x: 0, y: 0, z: 0, w: 0 };
+  private vp1VelX = 0;
+  private vp1VelY = 0;
+  private vp1PrevMouseX = 0;
+  private vp1PrevMouseY = 0;
+  private vp1PrevPixelX = 0;
+  private vp1PrevPixelY = 0;
+  private vp1HadFirstInput = false;
+
   // Tracking for reinit
   private _dyeInited = false;
   private _velocityInited = false;
@@ -430,20 +458,23 @@ export class FluidSimulation {
       TRANSMISSION2_FRESNEL_POWER: 3.0,
       TRANSMISSION2_FRESNEL_INTENSITY: 0.2,
       TRANSMISSION2_LIGHTING: true,
-      TRANSMISSION3: false,
-      TRANSMISSION3_IOR: 1.45,
-      TRANSMISSION3_THICKNESS: 2.5,
-      TRANSMISSION3_CA_SPREAD: 0.15,
-      TRANSMISSION3_CA_INTENSITY: 0.6,
-      TRANSMISSION3_CA_EDGE_WIDTH: 0.02,
-      TRANSMISSION3_GRAD_AMP: 3.0,
-      TRANSMISSION3_ROUGHNESS: 0.0,
-      TRANSMISSION3_CAUSTIC_INT: 0.5,
-      TRANSMISSION3_SPEC_POWER: 64.0,
-      TRANSMISSION3_SPEC_INTENSITY: 0.4,
-      TRANSMISSION3_FRESNEL_POWER: 3.0,
-      TRANSMISSION3_FRESNEL_INTENSITY: 0.2,
-      TRANSMISSION3_LIGHTING: true,
+      VP1_ENABLED: false,
+      VP1_PUSH_STRENGTH: 25,
+      VP1_VELOCITY_DISSIPATION: 0.975,
+      VP1_WEIGHT1_DISSIPATION: 0.95,
+      VP1_WEIGHT2_DISSIPATION: 0.80,
+      VP1_ACCEL_DISSIPATION: 0.8,
+      VP1_USE_NOISE: true,
+      VP1_CURL_SCALE: 0.02,
+      VP1_CURL_STRENGTH: 3,
+      VP1_MIN_RADIUS: 0,
+      VP1_MAX_RADIUS: 100,
+      VP1_RADIUS_RANGE: 100,
+      VP1_DISTORTION_AMOUNT: 20,
+      VP1_RGB_SHIFT: 1,
+      VP1_DISTORTION_MULTIPLIER: 1.25,
+      VP1_COLOR_MULTIPLIER: 1,
+      VP1_SHADE: 1.25,
       VELOCITY_SPLAT: true,
       VELOCITY_MAX_RADIUS: 0.5,
       VELOCITY_SENSITIVITY: 0.005,
@@ -508,6 +539,10 @@ export class FluidSimulation {
 
     // Start loop
     this.lastUpdateTime = Date.now();
+
+    // Init VelocityPaint1
+    this.initVP1();
+
     this.update();
   }
 
@@ -784,8 +819,8 @@ export class FluidSimulation {
       displayKeywords.push('TRANSMISSION1');
     } else if (this.config.TRANSMISSION2) {
       displayKeywords.push('TRANSMISSION2');
-    } else if (this.config.TRANSMISSION3) {
-      displayKeywords.push('TRANSMISSION3');
+    } else if (false) {
+      // TRANSMISSION3 removed — replaced by VelocityPaint1
     } else {
       if (this.config.SHADING) displayKeywords.push('SHADING');
       if (this.config.BLOOM) displayKeywords.push('BLOOM');
@@ -885,6 +920,11 @@ export class FluidSimulation {
     if (target == null && this.config.TRANSPARENT)
       this.drawCheckerboard(target);
     this.drawDisplay(target);
+
+    // VelocityPaint1 distortion pass (applied AFTER the main display)
+    if (this.config.VP1_ENABLED && this.config.VP1_DISTORTION_AMOUNT > 0) {
+      this.renderVP1Distortion();
+    }
   }
 
   private drawColor(target: FBO | null, color: { r: number; g: number; b: number }) {
@@ -939,22 +979,8 @@ export class FluidSimulation {
       gl.uniform1f(this.displayMaterial.uniforms.uLighting, this.config.TRANSMISSION2_LIGHTING ? 1.0 : 0.0);
       const bgNorm = normalizeColor(this.config.BACK_COLOR);
       gl.uniform3f(this.displayMaterial.uniforms.uBackColor, bgNorm.r, bgNorm.g, bgNorm.b);
-    } else if (this.config.TRANSMISSION3) {
-      gl.uniform1f(this.displayMaterial.uniforms.uIor3, this.config.TRANSMISSION3_IOR);
-      gl.uniform1f(this.displayMaterial.uniforms.uThickness3, this.config.TRANSMISSION3_THICKNESS);
-      gl.uniform1f(this.displayMaterial.uniforms.uCaSpread3, this.config.TRANSMISSION3_CA_SPREAD);
-      gl.uniform1f(this.displayMaterial.uniforms.uCaIntensity3, this.config.TRANSMISSION3_CA_INTENSITY);
-      gl.uniform1f(this.displayMaterial.uniforms.uCaEdgeWidth3, this.config.TRANSMISSION3_CA_EDGE_WIDTH);
-      gl.uniform1f(this.displayMaterial.uniforms.uGradAmp3, this.config.TRANSMISSION3_GRAD_AMP);
-      gl.uniform1f(this.displayMaterial.uniforms.uRoughness3, this.config.TRANSMISSION3_ROUGHNESS);
-      gl.uniform1f(this.displayMaterial.uniforms.uCausticInt3, this.config.TRANSMISSION3_CAUSTIC_INT);
-      gl.uniform1f(this.displayMaterial.uniforms.uSpecPower4, this.config.TRANSMISSION3_SPEC_POWER);
-      gl.uniform1f(this.displayMaterial.uniforms.uSpecIntensity4, this.config.TRANSMISSION3_SPEC_INTENSITY);
-      gl.uniform1f(this.displayMaterial.uniforms.uFresnelPower4, this.config.TRANSMISSION3_FRESNEL_POWER);
-      gl.uniform1f(this.displayMaterial.uniforms.uFresnelIntensity4, this.config.TRANSMISSION3_FRESNEL_INTENSITY);
-      gl.uniform1f(this.displayMaterial.uniforms.uLighting, this.config.TRANSMISSION3_LIGHTING ? 1.0 : 0.0);
-      const bgNorm = normalizeColor(this.config.BACK_COLOR);
-      gl.uniform3f(this.displayMaterial.uniforms.uBackColor, bgNorm.r, bgNorm.g, bgNorm.b);
+    } else if (false) {
+      // TRANSMISSION3 removed — replaced by VelocityPaint1
     } else {
       if (this.config.BLOOM) {
         gl.uniform1i(this.displayMaterial.uniforms.uBloom, this.bloom.attach(1));
@@ -1199,6 +1225,12 @@ export class FluidSimulation {
     this.updateColors(dt);
     this.applyInputs();
     if (!this.config.PAUSED) this.step(dt);
+
+    // VelocityPaint1 update (paint simulation)
+    if (this.config.VP1_ENABLED) {
+      this.updateVP1(dt);
+    }
+
     this.render(null);
     this.animFrameId = requestAnimationFrame(() => this.update());
   }
@@ -1240,5 +1272,233 @@ export class FluidSimulation {
   destroy() {
     this._destroyed = true;
     cancelAnimationFrame(this.animFrameId);
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // VelocityPaint1 — Lusion ScreenPaint 1:1 Clone
+  // ═══════════════════════════════════════════════════════════
+
+  private initVP1() {
+    const gl = this.gl;
+
+    // Compile VP1 programs
+    const vpVert = compileShader(gl, gl.VERTEX_SHADER, vpFullscreenVertSource);
+    const paintFrag = compileShader(gl, gl.FRAGMENT_SHADER, vpPaintShaderSource);
+    const distortFrag = compileShader(gl, gl.FRAGMENT_SHADER, vpDistortionShaderSource);
+    const blurFrag = compileShader(gl, gl.FRAGMENT_SHADER, vpBlurShaderSource);
+    const copyFrag = compileShader(gl, gl.FRAGMENT_SHADER, copyShaderSource);
+
+    this.vp1PaintProgram = new GLProgram(gl, vpVert, paintFrag);
+    this.vp1DistortionProgram = new GLProgram(gl, vpVert, distortFrag);
+    this.vp1BlurProgram = new GLProgram(gl, vpVert, blurFrag);
+    this.vp1CopyProgram = new GLProgram(gl, vpVert, copyFrag);
+
+    // Create FBOs at quarter resolution
+    const w = gl.drawingBufferWidth >> 2;
+    const h = gl.drawingBufferHeight >> 2;
+    const lw = gl.drawingBufferWidth >> 3;
+    const lh = gl.drawingBufferHeight >> 3;
+
+    const type = this.ext.halfFloatTexType;
+    const rgba = this.ext.formatRGBA;
+    if (!rgba) return;
+
+    const filtering = this.ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
+
+    this.vp1PrevPaintFBO = this.createFBO(w, h, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1CurrPaintFBO = this.createFBO(w, h, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1LowFBO = this.createFBO(lw, lh, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1LowBlurFBO = this.createFBO(lw, lh, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1TempFBO = this.createFBO(
+      gl.drawingBufferWidth, gl.drawingBufferHeight,
+      rgba.internalFormat, rgba.format, type, filtering
+    );
+
+    // Clear paint FBOs to (0.5, 0.5, 0, 0)
+    this.clearVP1();
+  }
+
+  private clearVP1() {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.vp1PrevPaintFBO.fbo);
+    gl.viewport(0, 0, this.vp1PrevPaintFBO.width, this.vp1PrevPaintFBO.height);
+    gl.clearColor(0.5, 0.5, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.vp1CurrPaintFBO.fbo);
+    gl.viewport(0, 0, this.vp1CurrPaintFBO.width, this.vp1CurrPaintFBO.height);
+    gl.clearColor(0.5, 0.5, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.vp1LowFBO.fbo);
+    gl.viewport(0, 0, this.vp1LowFBO.width, this.vp1LowFBO.height);
+    gl.clearColor(0.5, 0.5, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.vp1LowBlurFBO.fbo);
+    gl.viewport(0, 0, this.vp1LowBlurFBO.width, this.vp1LowBlurFBO.height);
+    gl.clearColor(0.5, 0.5, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    this.vp1VelX = 0;
+    this.vp1VelY = 0;
+  }
+
+  resizeVP1() {
+    const gl = this.gl;
+    const w = gl.drawingBufferWidth >> 2;
+    const h = gl.drawingBufferHeight >> 2;
+    const lw = gl.drawingBufferWidth >> 3;
+    const lh = gl.drawingBufferHeight >> 3;
+
+    if (!this.vp1CurrPaintFBO || w === this.vp1CurrPaintFBO.width && h === this.vp1CurrPaintFBO.height) return;
+
+    const type = this.ext.halfFloatTexType;
+    const rgba = this.ext.formatRGBA;
+    if (!rgba) return;
+    const filtering = this.ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
+
+    this.vp1PrevPaintFBO = this.resizeFBO(this.vp1PrevPaintFBO, w, h, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1CurrPaintFBO = this.resizeFBO(this.vp1CurrPaintFBO, w, h, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1LowFBO = this.resizeFBO(this.vp1LowFBO, lw, lh, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1LowBlurFBO = this.resizeFBO(this.vp1LowBlurFBO, lw, lh, rgba.internalFormat, rgba.format, type, filtering);
+    this.vp1TempFBO = this.resizeFBO(
+      this.vp1TempFBO, gl.drawingBufferWidth, gl.drawingBufferHeight,
+      rgba.internalFormat, rgba.format, type, filtering
+    );
+    this.clearVP1();
+  }
+
+  private updateVP1(dt: number) {
+    const gl = this.gl;
+    gl.disable(gl.BLEND);
+
+    const paintW = this.vp1CurrPaintFBO.width;
+    const paintH = this.vp1CurrPaintFBO.height;
+
+    // Ping-pong swap
+    const temp = this.vp1PrevPaintFBO;
+    this.vp1PrevPaintFBO = this.vp1CurrPaintFBO;
+    this.vp1CurrPaintFBO = temp;
+
+    // Get current mouse position in normalized [-1, 1] coords
+    const pointer = this.pointers[0];
+    const mouseX = pointer.texcoordX * 2.0 - 1.0;
+    const mouseY = -(pointer.texcoordY * 2.0 - 1.0);
+    const mousePixelX = pointer.texcoordX * gl.drawingBufferWidth;
+    const mousePixelY = pointer.texcoordY * gl.drawingBufferHeight;
+
+    // Calculate splat radius based on mouse speed
+    let dist = 0;
+    if (this.vp1HadFirstInput) {
+      const dx = mousePixelX - this.vp1PrevPixelX;
+      const dy = mousePixelY - this.vp1PrevPixelY;
+      dist = Math.sqrt(dx * dx + dy * dy);
+    }
+
+    const cfg = this.config;
+    let radius = cfg.VP1_MIN_RADIUS + (cfg.VP1_MAX_RADIUS - cfg.VP1_MIN_RADIUS) *
+      Math.min(dist / cfg.VP1_RADIUS_RANGE, 1.0);
+
+    // No radius if mouse hasn't moved or pointer not down
+    if (!pointer.moved && !pointer.down) radius = 0;
+
+    // Convert radius to paint-space
+    radius = radius / gl.drawingBufferHeight * paintH;
+
+    // Update draw data (from = previous, to = current)
+    this.vp1FromDrawData.x = this.vp1ToDrawData.x;
+    this.vp1FromDrawData.y = this.vp1ToDrawData.y;
+    this.vp1FromDrawData.z = this.vp1ToDrawData.z;
+    this.vp1FromDrawData.w = this.vp1ToDrawData.w;
+
+    this.vp1ToDrawData.x = (mouseX + 1.0) * paintW / 2.0;
+    this.vp1ToDrawData.y = (mouseY + 1.0) * paintH / 2.0;
+    this.vp1ToDrawData.z = radius;
+    this.vp1ToDrawData.w = 1.0;
+
+    if (!this.vp1HadFirstInput) {
+      this.vp1FromDrawData.x = this.vp1ToDrawData.x;
+      this.vp1FromDrawData.y = this.vp1ToDrawData.y;
+      this.vp1FromDrawData.z = 0;
+      this.vp1FromDrawData.w = 0;
+      this.vp1HadFirstInput = true;
+    }
+
+    // Accumulate velocity with acceleration dissipation
+    const newVelX = (this.vp1ToDrawData.x - this.vp1FromDrawData.x) * dt * 0.8;
+    const newVelY = (this.vp1ToDrawData.y - this.vp1FromDrawData.y) * dt * 0.8;
+    this.vp1VelX = this.vp1VelX * cfg.VP1_ACCEL_DISSIPATION + newVelX;
+    this.vp1VelY = this.vp1VelY * cfg.VP1_ACCEL_DISSIPATION + newVelY;
+
+    // Store for next frame
+    this.vp1PrevMouseX = mouseX;
+    this.vp1PrevMouseY = mouseY;
+    this.vp1PrevPixelX = mousePixelX;
+    this.vp1PrevPixelY = mousePixelY;
+
+    // ── Render paint shader ──
+    this.vp1PaintProgram.bind(gl);
+    gl.uniform1i(this.vp1PaintProgram.uniforms.u_lowPaintTexture, this.vp1LowFBO.attach(0));
+    gl.uniform1i(this.vp1PaintProgram.uniforms.u_prevPaintTexture, this.vp1PrevPaintFBO.attach(1));
+    gl.uniform2f(this.vp1PaintProgram.uniforms.u_paintTexelSize, 1.0 / paintW, 1.0 / paintH);
+    gl.uniform2f(this.vp1PaintProgram.uniforms.u_scrollOffset, 0.0, 0.0);
+    gl.uniform4f(this.vp1PaintProgram.uniforms.u_drawFrom,
+      this.vp1FromDrawData.x, this.vp1FromDrawData.y, this.vp1FromDrawData.z, this.vp1FromDrawData.w);
+    gl.uniform4f(this.vp1PaintProgram.uniforms.u_drawTo,
+      this.vp1ToDrawData.x, this.vp1ToDrawData.y, this.vp1ToDrawData.z, this.vp1ToDrawData.w);
+    gl.uniform1f(this.vp1PaintProgram.uniforms.u_pushStrength, cfg.VP1_PUSH_STRENGTH);
+    gl.uniform1f(this.vp1PaintProgram.uniforms.u_curlScale, cfg.VP1_CURL_SCALE);
+    gl.uniform1f(this.vp1PaintProgram.uniforms.u_curlStrength, cfg.VP1_CURL_STRENGTH);
+    gl.uniform1f(this.vp1PaintProgram.uniforms.u_useNoise, cfg.VP1_USE_NOISE ? 1.0 : 0.0);
+    gl.uniform2f(this.vp1PaintProgram.uniforms.u_vel, this.vp1VelX, this.vp1VelY);
+    gl.uniform3f(this.vp1PaintProgram.uniforms.u_dissipations,
+      cfg.VP1_VELOCITY_DISSIPATION, cfg.VP1_WEIGHT1_DISSIPATION, cfg.VP1_WEIGHT2_DISSIPATION);
+
+    this.blit(this.vp1CurrPaintFBO);
+
+    // ── Copy to low-res ──
+    this.vp1CopyProgram.bind(gl);
+    gl.uniform1i(this.vp1CopyProgram.uniforms.uTexture, this.vp1CurrPaintFBO.attach(0));
+    this.blit(this.vp1LowFBO);
+
+    // ── Blur low-res (horizontal + vertical) ──
+    this.vp1BlurProgram.bind(gl);
+    gl.uniform1i(this.vp1BlurProgram.uniforms.u_texture, this.vp1LowFBO.attach(0));
+    gl.uniform2f(this.vp1BlurProgram.uniforms.u_texelSize,
+      1.0 / this.vp1LowFBO.width, 1.0 / this.vp1LowFBO.height);
+    gl.uniform2f(this.vp1BlurProgram.uniforms.u_direction, 1.0, 0.0);
+    this.blit(this.vp1LowBlurFBO);
+
+    gl.uniform1i(this.vp1BlurProgram.uniforms.u_texture, this.vp1LowBlurFBO.attach(0));
+    gl.uniform2f(this.vp1BlurProgram.uniforms.u_direction, 0.0, 1.0);
+    this.blit(this.vp1LowFBO);
+  }
+
+  private renderVP1Distortion() {
+    const gl = this.gl;
+
+    // Step 1: Copy current screen to temp FBO
+    gl.disable(gl.BLEND);
+    this.vp1CopyProgram.bind(gl);
+
+    // Read current screen by binding null (default framebuffer) as source
+    // We need to copy the current frame into vp1TempFBO first
+    // Use the dye texture as the scene source since that's what's being displayed
+    gl.uniform1i(this.vp1CopyProgram.uniforms.uTexture, this.dye.read.attach(0));
+    this.blit(this.vp1TempFBO);
+
+    // Step 2: Render distortion to screen
+    this.vp1DistortionProgram.bind(gl);
+    gl.uniform1i(this.vp1DistortionProgram.uniforms.u_texture, this.vp1TempFBO.attach(0));
+    gl.uniform1i(this.vp1DistortionProgram.uniforms.u_screenPaintTexture, this.vp1CurrPaintFBO.attach(1));
+    gl.uniform2f(this.vp1DistortionProgram.uniforms.u_screenPaintTexelSize,
+      1.0 / gl.drawingBufferWidth, 1.0 / gl.drawingBufferHeight);
+    gl.uniform1f(this.vp1DistortionProgram.uniforms.u_amount, this.config.VP1_DISTORTION_AMOUNT);
+    gl.uniform1f(this.vp1DistortionProgram.uniforms.u_rgbShift, this.config.VP1_RGB_SHIFT);
+    gl.uniform1f(this.vp1DistortionProgram.uniforms.u_multiplier, this.config.VP1_DISTORTION_MULTIPLIER);
+    gl.uniform1f(this.vp1DistortionProgram.uniforms.u_colorMultiplier, this.config.VP1_COLOR_MULTIPLIER);
+    gl.uniform1f(this.vp1DistortionProgram.uniforms.u_shade, this.config.VP1_SHADE);
+    this.blit(null);
   }
 }

@@ -153,6 +153,8 @@ export const displayShaderSource = `
     uniform float uFresnelPower2;
     uniform float uFresnelIntensity2;
 
+
+
     uniform vec3 uBackColor;
 
     vec3 linearToGamma (vec3 color) {
@@ -425,6 +427,7 @@ export const displayShaderSource = `
         }
 
         gl_FragColor = vec4(c, 1.0);
+
     #else
         // ── Default Mode ──
     #ifdef SHADING
@@ -766,5 +769,197 @@ export const gradientSubtractShaderSource = `
         vec2 velocity = texture2D(uVelocity, vUv).xy;
         velocity.xy -= vec2(R - L, T - B);
         gl_FragColor = vec4(velocity, 0.0, 1.0);
+    }
+`;
+
+// ═══════════════════════════════════════════════════════════════════
+// VelocityPaint1 — Lusion ScreenPaint 1:1 Clone
+// ═══════════════════════════════════════════════════════════════════
+
+// Simple fullscreen vertex shader for VelocityPaint
+export const vpFullscreenVertSource = `
+    precision highp float;
+    attribute vec2 aPosition;
+    varying vec2 vUv;
+    void main() {
+        vUv = aPosition * 0.5 + 0.5;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+    }
+`;
+
+// ── VelocityPaint Paint Shader (1:1 from Lusion frag$n) ──
+// Does splat + self-advection + curl noise + dissipation in ONE pass
+export const vpPaintShaderSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    uniform sampler2D u_lowPaintTexture;
+    uniform sampler2D u_prevPaintTexture;
+    uniform vec2 u_paintTexelSize;
+    uniform vec2 u_scrollOffset;
+    uniform vec4 u_drawFrom;
+    uniform vec4 u_drawTo;
+    uniform float u_pushStrength;
+    uniform vec3 u_dissipations;
+    uniform vec2 u_vel;
+    uniform float u_curlScale;
+    uniform float u_curlStrength;
+    uniform float u_useNoise;
+
+    varying vec2 vUv;
+
+    // Signed distance to a line segment (mouse trail)
+    vec2 sdSegment(in vec2 p, in vec2 a, in vec2 b) {
+        vec2 pa = p - a, ba = b - a;
+        float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        return vec2(length(pa - ba * h), h);
+    }
+
+    // Hash for noise
+    vec2 hash(vec2 p) {
+        vec3 p3 = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973));
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;
+    }
+
+    // Value noise with derivatives (for curl noise)
+    vec3 noised(in vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+        vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+        vec2 ga = hash(i + vec2(0.0, 0.0));
+        vec2 gb = hash(i + vec2(1.0, 0.0));
+        vec2 gc = hash(i + vec2(0.0, 1.0));
+        vec2 gd = hash(i + vec2(1.0, 1.0));
+        float va = dot(ga, f - vec2(0.0, 0.0));
+        float vb = dot(gb, f - vec2(1.0, 0.0));
+        float vc = dot(gc, f - vec2(0.0, 1.0));
+        float vd = dot(gd, f - vec2(1.0, 1.0));
+        return vec3(
+            va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd),
+            ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd)
+                + du * (u.yx * (va - vb - vc + vd) + vec2(vb, vc) - va)
+        );
+    }
+
+    void main() {
+        // Step 1: Distance from pixel to mouse trail segment
+        vec2 res = sdSegment(gl_FragCoord.xy, u_drawFrom.xy, u_drawTo.xy);
+        vec2 radiusWeight = mix(u_drawFrom.zw, u_drawTo.zw, res.y);
+        float d = 1.0 - smoothstep(-0.01, radiusWeight.x, res.x);
+
+        // Step 2: Self-advection from low-res paint
+        vec4 lowData = texture2D(u_lowPaintTexture, vUv - u_scrollOffset);
+        vec2 velInv = (0.5 - lowData.xy) * u_pushStrength;
+
+        // Step 3: Curl noise (conditional)
+        if (u_useNoise > 0.5) {
+            vec3 noise3 = noised(gl_FragCoord.xy * u_curlScale * (1.0 - lowData.xy));
+            vec2 noise = noised(
+                gl_FragCoord.xy * u_curlScale * (2.0 - lowData.xy * (0.5 + noise3.x) + noise3.yz * 0.1)
+            ).yz;
+            velInv += noise * (lowData.z + lowData.w) * u_curlStrength;
+        }
+
+        // Step 4: Sample previous paint with advection offset
+        vec4 data = texture2D(u_prevPaintTexture, vUv - u_scrollOffset + velInv * u_paintTexelSize);
+        data.xy -= 0.5;
+
+        // Step 5: Dissipation
+        vec4 delta = (u_dissipations.xxyz - 1.0) * data;
+
+        // Step 6: Add new splat
+        vec2 newVel = u_vel * d;
+        delta += vec4(newVel, radiusWeight.yy * d);
+        delta.zw = sign(delta.zw) * max(vec2(0.004), abs(delta.zw));
+
+        // Step 7: Combine and output
+        data += delta;
+        data.xy += 0.5;
+        gl_FragColor = clamp(data, vec4(0.0), vec4(1.0));
+    }
+`;
+
+// ── VelocityPaint Distortion Shader (1:1 from Lusion frag$1) ──
+// 9-sample directional blur + RGB color shift
+export const vpDistortionShaderSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    uniform sampler2D u_texture;
+    uniform sampler2D u_screenPaintTexture;
+    uniform vec2 u_screenPaintTexelSize;
+    uniform float u_amount;
+    uniform float u_rgbShift;
+    uniform float u_multiplier;
+    uniform float u_colorMultiplier;
+    uniform float u_shade;
+
+    varying vec2 vUv;
+
+    // Simple hash for noise dithering
+    float hash13(vec3 p3) {
+        p3 = fract(p3 * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    void main() {
+        // Blue noise substitute (simple hash)
+        vec3 bnoise = vec3(
+            hash13(vec3(gl_FragCoord.xy, 0.0)),
+            hash13(vec3(gl_FragCoord.xy, 1.0)),
+            hash13(vec3(gl_FragCoord.xy, 2.0))
+        );
+
+        // Sample paint/velocity texture
+        vec4 data = texture2D(u_screenPaintTexture, vUv);
+        float weight = (data.z + data.w) * 0.5;
+        vec2 vel = (0.5 - data.xy - 0.001) * 2.0 * weight;
+
+        // 9-sample directional blur along velocity
+        vec4 color = vec4(0.0);
+        vec2 velocity = vel * u_amount / 4.0 * u_screenPaintTexelSize * u_multiplier;
+        vec2 uv = vUv + bnoise.xy * velocity;
+        for (int i = 0; i < 9; i++) {
+            color += texture2D(u_texture, uv);
+            uv += velocity;
+        }
+        color /= 9.0;
+
+        // RGB color shift (rainbow aberration)
+        color.rgb += sin(
+            vec3(vel.x + vel.y) * 40.0 + vec3(0.0, 2.0, 4.0) * u_rgbShift
+        ) * smoothstep(0.4, -0.9, weight)
+          * u_shade
+          * max(abs(vel.x), abs(vel.y))
+          * u_colorMultiplier;
+
+        gl_FragColor = color;
+    }
+`;
+
+// ── VelocityPaint Blur Shader (Gaussian) ──
+export const vpBlurShaderSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    uniform sampler2D u_texture;
+    uniform vec2 u_texelSize;
+    uniform vec2 u_direction;
+
+    varying vec2 vUv;
+
+    void main() {
+        vec4 color = vec4(0.0);
+        vec2 off1 = u_direction * u_texelSize * 1.3846153846;
+        vec2 off2 = u_direction * u_texelSize * 3.2307692308;
+        color += texture2D(u_texture, vUv) * 0.2270270270;
+        color += texture2D(u_texture, vUv + off1) * 0.3162162162;
+        color += texture2D(u_texture, vUv - off1) * 0.3162162162;
+        color += texture2D(u_texture, vUv + off2) * 0.0702702703;
+        color += texture2D(u_texture, vUv - off2) * 0.0702702703;
+        gl_FragColor = color;
     }
 `;

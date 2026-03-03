@@ -73,21 +73,24 @@ export default function MouseFluid() {
       fresnelIntensity2: { value: 0.2, min: 0.0, max: 1.0, step: 0.01, label: 'Fresnel Intensity' },
       lighting3d2: { value: true, label: '3D Lighting' },
     }),
-    transmissionMaterial3: folder({
-      transmission3Enabled: { value: false, label: 'TransmissionMaterial3' },
-      ior3: { value: 1.45, min: 1.0, max: 2.5, step: 0.01, label: 'IOR' },
-      thickness3: { value: 2.5, min: 0.0, max: 10.0, step: 0.05, label: 'Thickness' },
-      caSpread3: { value: 0.15, min: 0.0, max: 1.0, step: 0.01, label: 'CA Spread' },
-      caIntensity3: { value: 0.6, min: 0.0, max: 2.0, step: 0.01, label: 'CA Intensity' },
-      caEdgeWidth3: { value: 0.02, min: 0.001, max: 0.2, step: 0.001, label: 'CA Edge Width' },
-      gradAmp3: { value: 3.0, min: 1.0, max: 20.0, step: 0.1, label: 'Gradient Amplify' },
-      roughness3: { value: 0.0, min: 0.0, max: 1.0, step: 0.01, label: 'Roughness' },
-      causticInt3: { value: 0.5, min: 0.0, max: 2.0, step: 0.01, label: 'Caustic Intensity' },
-      specPower3: { value: 64, min: 1.0, max: 1024.0, step: 1.0, label: 'Specular Power' },
-      specIntensity3: { value: 0.4, min: 0.0, max: 1.0, step: 0.01, label: 'Specular Intensity' },
-      fresnelPower3: { value: 3.0, min: 0.5, max: 10.0, step: 0.1, label: 'Fresnel Power' },
-      fresnelIntensity3: { value: 0.2, min: 0.0, max: 1.0, step: 0.01, label: 'Fresnel Intensity' },
-      lighting3d3: { value: true, label: '3D Lighting' },
+    velocityPaint1: folder({
+      vp1Enabled: { value: false, label: 'VelocityPaint1' },
+      vp1PushStrength: { value: 25, min: 0, max: 100, step: 1, label: 'Push Strength' },
+      vp1VelocityDissipation: { value: 0.975, min: 0.9, max: 1.0, step: 0.001, label: 'Vel Dissipation' },
+      vp1Weight1Dissipation: { value: 0.95, min: 0.8, max: 1.0, step: 0.005, label: 'Weight1 Dissip' },
+      vp1Weight2Dissipation: { value: 0.80, min: 0.3, max: 1.0, step: 0.01, label: 'Weight2 Dissip' },
+      vp1AccelDissipation: { value: 0.8, min: 0.1, max: 1.0, step: 0.01, label: 'Accel Dissip' },
+      vp1UseNoise: { value: true, label: 'Curl Noise' },
+      vp1CurlScale: { value: 0.02, min: 0.001, max: 0.5, step: 0.001, label: 'Curl Scale' },
+      vp1CurlStrength: { value: 3, min: 0, max: 20, step: 0.1, label: 'Curl Strength' },
+      vp1MinRadius: { value: 0, min: 0, max: 50, step: 1, label: 'Min Radius' },
+      vp1MaxRadius: { value: 100, min: 10, max: 500, step: 1, label: 'Max Radius' },
+      vp1RadiusRange: { value: 100, min: 10, max: 500, step: 1, label: 'Radius Range' },
+      vp1DistortionAmount: { value: 20, min: 0, max: 100, step: 0.5, label: 'Distortion Amount' },
+      vp1RgbShift: { value: 1, min: 0, max: 5, step: 0.1, label: 'RGB Shift' },
+      vp1DistortionMultiplier: { value: 1.25, min: 0, max: 10, step: 0.05, label: 'Distort Multiplier' },
+      vp1ColorMultiplier: { value: 1, min: 0, max: 20, step: 0.1, label: 'Color Multiplier' },
+      vp1Shade: { value: 1.25, min: 0, max: 5, step: 0.05, label: 'Shade' },
     }),
   });
 
@@ -145,20 +148,23 @@ export default function MouseFluid() {
     sim.config.TRANSMISSION2_FRESNEL_POWER = controls.fresnelPower2;
     sim.config.TRANSMISSION2_FRESNEL_INTENSITY = controls.fresnelIntensity2;
     sim.config.TRANSMISSION2_LIGHTING = controls.lighting3d2;
-    sim.config.TRANSMISSION3 = controls.transmission3Enabled;
-    sim.config.TRANSMISSION3_IOR = controls.ior3;
-    sim.config.TRANSMISSION3_THICKNESS = controls.thickness3;
-    sim.config.TRANSMISSION3_CA_SPREAD = controls.caSpread3;
-    sim.config.TRANSMISSION3_CA_INTENSITY = controls.caIntensity3;
-    sim.config.TRANSMISSION3_CA_EDGE_WIDTH = controls.caEdgeWidth3;
-    sim.config.TRANSMISSION3_GRAD_AMP = controls.gradAmp3;
-    sim.config.TRANSMISSION3_ROUGHNESS = controls.roughness3;
-    sim.config.TRANSMISSION3_CAUSTIC_INT = controls.causticInt3;
-    sim.config.TRANSMISSION3_SPEC_POWER = controls.specPower3;
-    sim.config.TRANSMISSION3_SPEC_INTENSITY = controls.specIntensity3;
-    sim.config.TRANSMISSION3_FRESNEL_POWER = controls.fresnelPower3;
-    sim.config.TRANSMISSION3_FRESNEL_INTENSITY = controls.fresnelIntensity3;
-    sim.config.TRANSMISSION3_LIGHTING = controls.lighting3d3;
+    sim.config.VP1_ENABLED = controls.vp1Enabled;
+    sim.config.VP1_PUSH_STRENGTH = controls.vp1PushStrength;
+    sim.config.VP1_VELOCITY_DISSIPATION = controls.vp1VelocityDissipation;
+    sim.config.VP1_WEIGHT1_DISSIPATION = controls.vp1Weight1Dissipation;
+    sim.config.VP1_WEIGHT2_DISSIPATION = controls.vp1Weight2Dissipation;
+    sim.config.VP1_ACCEL_DISSIPATION = controls.vp1AccelDissipation;
+    sim.config.VP1_USE_NOISE = controls.vp1UseNoise;
+    sim.config.VP1_CURL_SCALE = controls.vp1CurlScale;
+    sim.config.VP1_CURL_STRENGTH = controls.vp1CurlStrength;
+    sim.config.VP1_MIN_RADIUS = controls.vp1MinRadius;
+    sim.config.VP1_MAX_RADIUS = controls.vp1MaxRadius;
+    sim.config.VP1_RADIUS_RANGE = controls.vp1RadiusRange;
+    sim.config.VP1_DISTORTION_AMOUNT = controls.vp1DistortionAmount;
+    sim.config.VP1_RGB_SHIFT = controls.vp1RgbShift;
+    sim.config.VP1_DISTORTION_MULTIPLIER = controls.vp1DistortionMultiplier;
+    sim.config.VP1_COLOR_MULTIPLIER = controls.vp1ColorMultiplier;
+    sim.config.VP1_SHADE = controls.vp1Shade;
     sim.config.VELOCITY_SPLAT = controls.velocitySplatEnabled;
     sim.config.VELOCITY_MAX_RADIUS = controls.velocityMaxRadius;
     sim.config.VELOCITY_SENSITIVITY = controls.velocitySensitivity;
