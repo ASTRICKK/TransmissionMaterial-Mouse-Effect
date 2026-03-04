@@ -85,8 +85,7 @@ in vec2 vUv;
 out vec4 fragColor;
 
 #ifdef USE_NOISE
-// PCG-style lattice gradient — integer permutation, two independent axes
-// Ref: M. Jarzynski, M. Olano – "Hash Functions for GPU Rendering", JCGT 2020
+// PCG-style integer hash — two independent axes
 vec2 pcgGrad(ivec2 cell) {
     uvec2 s = uvec2(cell);
     s = s * 1664525u + 1013904223u;
@@ -96,9 +95,7 @@ vec2 pcgGrad(ivec2 cell) {
     return vec2(s & 0x7FFFFFFFu) * (2.0 / float(0x7FFFFFFF)) - 1.0;
 }
 
-// Simplex 2D noise with analytic partial derivatives
-// Ref: Stefan Gustavson – "Simplex noise demystified", 2005
-// Returns: .x = noise value  .yz = (dn/dx, dn/dy)
+// Simplex 2D noise — returns: .x = value  .yz = (dn/dx, dn/dy)
 vec3 paintNoise(vec2 p) {
     const float F2 = 0.36602540378;  // (sqrt(3) - 1) / 2  — skew
     const float G2 = 0.21132486540;  // (3 - sqrt(3)) / 6  — unskew
@@ -156,19 +153,17 @@ void main() {
     vec2 pushVec   = flowField * (-p_spread);
 
     #ifdef USE_NOISE
-    // Curl field from simplex derivatives, attenuated by paint density
-    vec2 baseCoord = gl_FragCoord.xy * n_scale;
-    vec3 noiseVal  = paintNoise(baseCoord * (1.0 - lowSample.xy * 0.95));
-    vec2 swirl     = noiseVal.zy * vec2(1.0, -1.0);
+    vec2  nP   = gl_FragCoord.xy * n_scale;
+    vec3  nVal = paintNoise(nP);
+    vec2  swirl = vec2(nVal.z, -nVal.y);
 
     #ifdef USE_NOISE_2OCT
-    // 2nd octave: cheap hash perturbation (~5 ops vs full simplex)
-    float blend   = noiseVal.x * 0.8 + 0.6;
-    vec2  coord2  = baseCoord * (2.0 - lowSample.xy * blend) + noiseVal.yz * 0.12;
-    swirl = pcgGrad(ivec2(coord2));
+    const mat2 kOctRot = mat2(1.6, 1.2, -1.2, 1.6);
+    swirl = pcgGrad(ivec2(kOctRot * nP + nVal.yz * 0.15));
     #endif
 
-    pushVec += swirl * dot(lowSample.zw, vec2(1.0)) * n_strength;
+    float curlMask = smoothstep(0.35, 0.02, length(lowSample.xy - 0.5));
+    pushVec += swirl * (dot(lowSample.zw, vec2(1.0)) * n_strength * curlMask);
     #endif
 
     vec4 frag = texture(t_prevFrame, vUv - v_scrollDelta + pushVec * v_texelSize);
@@ -210,21 +205,27 @@ in vec2 vUv;
 out vec4 fragColor;
 
 // R2 quasi-random sequence — generalized golden ratio in 2D
-// Ref: Martin Roberts, "The Unreasonable Effectiveness of Quasirandom Sequences", 2018
 vec2 r2Jitter(vec2 seed) {
     const vec2 alpha = vec2(0.7548776662466927, 0.5698402909980532); // 1/phi2
     return fract(seed * alpha);
 }
 
-const float kChannelStep = 2.09439510239; // τ/3 — equal 120° RGB hue spacing
+// Parabolic periodic oscillator — analytic, no trig intrinsics
+vec3 smoothOsc(vec3 x) {
+    x -= floor(x * 0.15915494 + 0.5) * 6.28318530;
+    vec3 y = x * (3.14159265 - abs(x)) * 0.40528473;
+    return y * (0.775 + 0.225 * abs(y));
+}
+
+const float kChannelStep = 2.09439510239;
 
 void main() {
     vec2 jitter = r2Jitter(gl_FragCoord.xy);
 
-    const float kVelEps = 1.0 / 2048.0;
     vec4  velTex   = texture(t_velPaint, vUv);
     float paintMix = dot(velTex.zw, vec2(0.5));
-    vec2  flowDir  = (0.5 - velTex.xy - kVelEps) * 2.0 * paintMix;
+    // Linear decode: xy * negScale + bias  (eps folded into bias constant)
+    vec2  flowDir  = velTex.xy * (-2.0 * paintMix) + (paintMix * (1023.0 / 1024.0));
 
     // Directional blur along flow field
     vec2 stepVec  = flowDir * p_stepScale * v_paintTexel;
@@ -241,7 +242,7 @@ void main() {
     float chromaRamp = 1.0 - smoothstep(-0.9, 0.4, paintMix);
     vec2 absFlow  = abs(flowDir);
     float flowPeak = max(absFlow.x, absFlow.y);
-    result.rgb += sin(
+    result.rgb += smoothOsc(
         vec3(dot(flowDir, vec2(1.0))) * kChromaFreq
         + vec3(0.0, kChannelStep, kChannelStep * 2.0) * p_chromatic
     ) * (chromaRamp * p_edgeShade * flowPeak * p_colorBoost);
@@ -301,7 +302,7 @@ in vec2 vUv;
 out vec4 fragColor;
 
 float filmGrain(vec3 p) {
-    // Per-axis fold hash — vec3 scale + .zxy cross-mix (structurally distinct from scalar + .yzx patterns)
+    // Three-axis fold hash — vec3 scale + .zxy cross-mix
     p = fract(p * vec3(0.1179, 0.1323, 0.0917));
     p += dot(p, p.zxy + 39.47);
     return fract((p.y + p.z) * p.x);

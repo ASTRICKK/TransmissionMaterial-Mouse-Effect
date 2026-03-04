@@ -5,7 +5,7 @@ import VelocityPaint from "@/components/canvas/VelocityPaint/VelocityPaint";
 export default function Home() {
   return (
     <div className="main">
-      <MouseFluid />
+      {/* <MouseFluid /> */}
       <VelocityPaint />
     </div>
   );
