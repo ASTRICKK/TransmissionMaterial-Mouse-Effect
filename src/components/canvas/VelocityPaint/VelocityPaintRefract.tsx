@@ -4,13 +4,17 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useControls, folder } from 'leva';
 import { VelocityPaintEngine } from './velocityPaintEngine';
 
-export default function VelocityPaint() {
+export default function VelocityPaintRefract() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<VelocityPaintEngine | null>(null);
+  const frameRef = useRef(0);
+  const lastTimeRef = useRef(0);
+  const pausedRef = useRef(false);
+  const rectRef = useRef<DOMRect | null>(null);
 
   // ── Leva Controls ──────────────────────────────────────
 
-  const controls = useControls('VelocityPaint', {
+  const controls = useControls('VelocityPaintRefract', {
     paint: folder({
       pushStrength:         { value: 25,    min: 0,    max: 100, step: 1,     label: 'Push Strength' },
       velocityDissipation:  { value: 0.975, min: 0.9,  max: 1.0, step: 0.001, label: 'Vel Dissipation' },
@@ -66,23 +70,30 @@ export default function VelocityPaint() {
 
   // ── Event Handlers ─────────────────────────────────────
 
-  const onMouseMove  = useCallback((e: MouseEvent) => engineRef.current?.onMove(e.clientX, e.clientY), []);
-  const onMouseDown  = useCallback(() => engineRef.current?.onDown(), []);
-  const onMouseUp    = useCallback(() => engineRef.current?.onUp(), []);
+  const onMouseMove = useCallback((e: MouseEvent) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    rectRef.current ??= canvasRef.current!.getBoundingClientRect();
+    engine.onMove(e.clientX, e.clientY, rectRef.current);
+  }, []);
 
   const onTouchStart = useCallback((e: TouchEvent) => {
     e.preventDefault();
     const t = e.touches[0];
-    if (t) { engineRef.current?.onDown(); engineRef.current?.onMove(t.clientX, t.clientY); }
+    if (t) {
+      rectRef.current ??= canvasRef.current!.getBoundingClientRect();
+      engineRef.current?.onMove(t.clientX, t.clientY, rectRef.current);
+    }
   }, []);
 
   const onTouchMove = useCallback((e: TouchEvent) => {
     e.preventDefault();
     const t = e.touches[0];
-    if (t) engineRef.current?.onMove(t.clientX, t.clientY);
+    if (t) {
+      rectRef.current ??= canvasRef.current!.getBoundingClientRect();
+      engineRef.current?.onMove(t.clientX, t.clientY, rectRef.current);
+    }
   }, []);
-
-  const onTouchEnd = useCallback(() => engineRef.current?.onUp(), []);
 
   // ── Init / Cleanup ─────────────────────────────────────
 
@@ -90,27 +101,97 @@ export default function VelocityPaint() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const engine = new VelocityPaintEngine(canvas);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.floor(canvas.clientWidth  * dpr);
+    const h = Math.floor(canvas.clientHeight * dpr);
+    canvas.width  = Math.max(w, 1);
+    canvas.height = Math.max(h, 1);
+
+    const gl = canvas.getContext('webgl2', {
+      alpha: true, depth: false, stencil: false,
+      antialias: false, preserveDrawingBuffer: false,
+    });
+    if (!gl) throw new Error('WebGL2 not supported');
+
+    const engine = new VelocityPaintEngine(gl);
+    engine.setDPR(dpr);
     engineRef.current = engine;
 
+    // ── Frame loop ──
+    const tick = () => {
+      if (pausedRef.current) return;
+      const now = performance.now();
+      const dt = Math.min((now - lastTimeRef.current) * 1e-3, 1.0 / 60.0);
+      lastTimeRef.current = now;
+      engine.update(dt, now);
+      frameRef.current = requestAnimationFrame(tick);
+    };
+    lastTimeRef.current = performance.now();
+    tick();
+
+    // ── Resize ──
+    let resizeTimer = 0;
+    const resizeObserver = new ResizeObserver(() => {
+      clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        const d = Math.min(window.devicePixelRatio || 1, 2);
+        const rw = Math.max(Math.floor(canvas.clientWidth  * d), 1);
+        const rh = Math.max(Math.floor(canvas.clientHeight * d), 1);
+        canvas.width  = rw;
+        canvas.height = rh;
+        engine.setDPR(d);
+        engine.resize(rw, rh);
+        rectRef.current = null;
+      }, 150);
+    });
+    resizeObserver.observe(canvas);
+
+    // ── Events ──
+    const onMouseEnter = () => engine.resetCursorState();
+    const onVisChange = () => {
+      if (document.hidden) {
+        pausedRef.current = true;
+        cancelAnimationFrame(frameRef.current);
+      } else {
+        pausedRef.current = false;
+        engine.resetCursorState();
+        lastTimeRef.current = performance.now();
+        tick();
+      }
+    };
+    const onCtxLost = (e: Event) => { e.preventDefault(); cancelAnimationFrame(frameRef.current); };
+    const onCtxRestored = () => {
+      const newGl = canvas.getContext('webgl2')!;
+      const newEngine = new VelocityPaintEngine(newGl);
+      newEngine.setDPR(Math.min(window.devicePixelRatio || 1, 2));
+      engineRef.current = newEngine;
+      lastTimeRef.current = performance.now();
+      tick();
+    };
+
     window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mousedown', onMouseDown);
-    window.addEventListener('mouseup',   onMouseUp);
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
     canvas.addEventListener('touchmove',  onTouchMove,  { passive: false });
-    window.addEventListener('touchend',   onTouchEnd);
+    canvas.addEventListener('mouseenter', onMouseEnter);
+    document.addEventListener('visibilitychange', onVisChange);
+    canvas.addEventListener('webglcontextlost', onCtxLost);
+    canvas.addEventListener('webglcontextrestored', onCtxRestored);
 
     return () => {
+      cancelAnimationFrame(frameRef.current);
+      clearTimeout(resizeTimer);
+      resizeObserver.disconnect();
       engine.dispose();
       engineRef.current = null;
       window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mouseup',   onMouseUp);
       canvas.removeEventListener('touchstart', onTouchStart);
       canvas.removeEventListener('touchmove',  onTouchMove);
-      window.removeEventListener('touchend',   onTouchEnd);
+      canvas.removeEventListener('mouseenter', onMouseEnter);
+      document.removeEventListener('visibilitychange', onVisChange);
+      canvas.removeEventListener('webglcontextlost', onCtxLost);
+      canvas.removeEventListener('webglcontextrestored', onCtxRestored);
     };
-  }, [onMouseMove, onMouseDown, onMouseUp, onTouchStart, onTouchMove, onTouchEnd]);
+  }, [onMouseMove, onTouchStart, onTouchMove]);
 
   return (
     <canvas

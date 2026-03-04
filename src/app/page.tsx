@@ -1,12 +1,14 @@
 import "./page.css";
 import MouseFluid from "@/components/canvas/MouseFluid/MouseFluid";
-import VelocityPaint from "@/components/canvas/VelocityPaint/VelocityPaint";
+import VelocityPaintRefract from "@/components/canvas/VelocityPaint/VelocityPaintRefract";
+import VelocityPaintShimmer from "@/components/canvas/VelocityPaint/VelocityPaintShimmer";
 
 export default function Home() {
   return (
     <div className="main">
       {/* <MouseFluid /> */}
-      <VelocityPaint />
+      <VelocityPaintRefract />
+      {/* <VelocityPaintShimmer /> */}
     </div>
   );
 }

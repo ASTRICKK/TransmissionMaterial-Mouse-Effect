@@ -1,20 +1,20 @@
 /*
-  VelocityPaint Engine — v4
-  Passive WebGL2 velocity-painting renderer.
-  Accepts an external GL context; caller drives the frame loop.
-  Zero external dependencies.
+  VelocityPaintShimmer Engine
+  Thin-film iridescence variant of VelocityPaint.
+  Same velocity-painting pipeline, different compositing shader.
 */
 
 import { VERT } from './shaders/vert';
 import { PAINT_FRAG, PAINT_FRAG_NOISE, PAINT_FRAG_NOISE_2 } from './shaders/paintFrag';
-import { DISTORT_FRAG } from './shaders/distortFrag';
+import { SHIMMER_FRAG } from './shaders/shimmerFrag';
 import { BLUR_FRAG } from './shaders/blurFrag';
 import { COPY_FRAG } from './shaders/copyFrag';
 import { BG_FRAG } from './shaders/bgFrag';
 
 // ── Config ────────────────────────────────────────────────
 
-export interface VPConfig {
+export interface VPShimmerConfig {
+  // Brush / Velocity
   pushStrength: number;
   velocityDissipation: number;
   weight1Dissipation: number;
@@ -28,15 +28,17 @@ export interface VPConfig {
   minRadius: number;
   maxRadius: number;
   radiusRange: number;
+  // Shimmer-specific
   distortionAmount: number;
-  chromaticShift: number;
+  filmThickness: number;
+  iridIntensity: number;
+  fresnelPower: number;
   velocityScale: number;
-  colorBoost: number;
   edgeShade: number;
   bgColor: { r: number; g: number; b: number };
 }
 
-export const VP_DEFAULTS: VPConfig = {
+export const VP_SHIMMER_DEFAULTS: VPShimmerConfig = {
   pushStrength: 25,
   velocityDissipation: 0.975,
   weight1Dissipation: 0.951,
@@ -50,12 +52,14 @@ export const VP_DEFAULTS: VPConfig = {
   minRadius: 0,
   maxRadius: 100,
   radiusRange: 100,
-  distortionAmount: 3,
-  chromaticShift: 0.5,
+  // Shimmer defaults — tuned for soap-bubble / Annihilation feel
+  distortionAmount: 2.5,
+  filmThickness: 1.8,
+  iridIntensity: 12,
+  fresnelPower: 2.5,
   velocityScale: 5,
-  colorBoost: 10,
-  edgeShade: 1.25,
-  bgColor: { r: 17, g: 19, b: 26 },
+  edgeShade: 1.5,
+  bgColor: { r: 10, g: 12, b: 22 },
 };
 
 
@@ -134,14 +138,14 @@ function createRenderTarget(gl: WebGL2RenderingContext, w: number, h: number): F
 
 // ── Main Engine ───────────────────────────────────────────
 
-export class VelocityPaintEngine {
+export class VelocityPaintShimmerEngine {
   private gl: WebGL2RenderingContext;
-  config: VPConfig;
+  config: VPShimmerConfig;
 
   private paintShaderNoise!:  ShaderProgram;
   private paintShaderNoise2!: ShaderProgram;
   private paintShaderFlat!:   ShaderProgram;
-  private distortShader!: ShaderProgram;
+  private shimmerShader!: ShaderProgram;
   private blurShader!: ShaderProgram;
   private copyShader!: ShaderProgram;
   private bgShader!: ShaderProgram;
@@ -180,9 +184,9 @@ export class VelocityPaintEngine {
   private viewportH = 0;
   private dpr = 1;
 
-  constructor(gl: WebGL2RenderingContext, config?: Partial<VPConfig>) {
+  constructor(gl: WebGL2RenderingContext, config?: Partial<VPShimmerConfig>) {
     this.gl = gl;
-    this.config = { ...VP_DEFAULTS, ...config };
+    this.config = { ...VP_SHIMMER_DEFAULTS, ...config };
 
     gl.getExtension('EXT_color_buffer_float');
     gl.getExtension('OES_texture_float_linear');
@@ -227,7 +231,7 @@ export class VelocityPaintEngine {
     this.paintShaderNoise  = createShaderProgram(gl, VERT, PAINT_FRAG_NOISE);
     this.paintShaderNoise2 = createShaderProgram(gl, VERT, PAINT_FRAG_NOISE_2);
     this.paintShaderFlat   = createShaderProgram(gl, VERT, PAINT_FRAG);
-    this.distortShader    = createShaderProgram(gl, VERT, DISTORT_FRAG);
+    this.shimmerShader    = createShaderProgram(gl, VERT, SHIMMER_FRAG);
     this.blurShader       = createShaderProgram(gl, VERT, BLUR_FRAG);
     this.copyShader       = createShaderProgram(gl, VERT, COPY_FRAG);
     this.bgShader         = createShaderProgram(gl, VERT, BG_FRAG);
@@ -431,7 +435,7 @@ export class VelocityPaintEngine {
     this.hasMoved = false;
   }
 
-  // ── Render Pass ──────────────────────────────────────────
+  // ── Render Pass (Shimmer) ──────────────────────────────────
 
   private renderPass() {
     const gl = this.gl;
@@ -453,16 +457,18 @@ export class VelocityPaintEngine {
     this.drawQuad(this.rtScene);
 
     if (this.config.distortionAmount > 0) {
-      gl.useProgram(this.distortShader.program);
-      gl.uniform1i(this.distortShader.uniforms.t_scene,    this.rtScene.attach(0));
-      gl.uniform1i(this.distortShader.uniforms.t_velPaint, this.rtCurr.attach(1));
-      gl.uniform2f(this.distortShader.uniforms.v_paintTexel,
+      gl.useProgram(this.shimmerShader.program);
+      gl.uniform1i(this.shimmerShader.uniforms.t_scene,    this.rtScene.attach(0));
+      gl.uniform1i(this.shimmerShader.uniforms.t_velPaint, this.rtCurr.attach(1));
+      gl.uniform2f(this.shimmerShader.uniforms.v_paintTexel,
         1.0 / this.rtCurr.width, 1.0 / this.rtCurr.height);
-      gl.uniform1f(this.distortShader.uniforms.p_stepScale,
+      gl.uniform1f(this.shimmerShader.uniforms.p_stepScale,
         this.config.distortionAmount * this.config.velocityScale * 0.25);
-      gl.uniform1f(this.distortShader.uniforms.p_chromatic,  this.config.chromaticShift);
-      gl.uniform1f(this.distortShader.uniforms.p_colorBoost, this.config.colorBoost);
-      gl.uniform1f(this.distortShader.uniforms.p_edgeShade,  this.config.edgeShade);
+      gl.uniform1f(this.shimmerShader.uniforms.p_filmThickness, this.config.filmThickness);
+      gl.uniform1f(this.shimmerShader.uniforms.p_iridIntensity, this.config.iridIntensity);
+      gl.uniform1f(this.shimmerShader.uniforms.p_fresnelPower,  this.config.fresnelPower);
+      gl.uniform1f(this.shimmerShader.uniforms.p_edgeShade,     this.config.edgeShade);
+      gl.uniform1f(this.shimmerShader.uniforms.u_time,          this.now * 0.001);
       this.drawQuad(null);
     } else {
       gl.useProgram(this.copyShader.program);
@@ -524,7 +530,7 @@ export class VelocityPaintEngine {
     gl.deleteProgram(this.paintShaderNoise.program);
     gl.deleteProgram(this.paintShaderNoise2.program);
     gl.deleteProgram(this.paintShaderFlat.program);
-    gl.deleteProgram(this.distortShader.program);
+    gl.deleteProgram(this.shimmerShader.program);
     gl.deleteProgram(this.blurShader.program);
     gl.deleteProgram(this.copyShader.program);
     gl.deleteProgram(this.bgShader.program);
