@@ -9,10 +9,10 @@ export default function Home() {
   return (
     <div className="main">
       {/* <MouseFluid /> */}
-      {/* <VelocityPaintRefract /> */}
+      <VelocityPaintRefract />
       {/* <VelocityPaintIridescence /> */}
       {/* <VelocityPaintOil /> */}
-      <FluidPhysicPaintWater />
+      {/* <FluidPhysicPaintWater /> */}
     </div>
   );
 }

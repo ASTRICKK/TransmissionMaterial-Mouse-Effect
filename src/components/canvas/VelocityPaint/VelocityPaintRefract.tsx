@@ -17,10 +17,10 @@ export default function VelocityPaintRefract() {
   const controls = useControls('VelocityPaintRefract', {
     paint: folder({
       pushStrength:         { value: 25,    min: 0,    max: 100, step: 1,     label: 'Push Strength' },
-      velocityDissipation:  { value: 0.975, min: 0.9,  max: 1.0, step: 0.001, label: 'Vel Dissipation' },
-      weight1Dissipation:   { value: 0.95,  min: 0.8,  max: 1.0, step: 0.005, label: 'W1 Dissipation' },
-      weight2Dissipation:   { value: 0.80,  min: 0.3,  max: 1.0, step: 0.01,  label: 'W2 Dissipation' },
-      accelDissipation:     { value: 0.8,   min: 0.1,  max: 1.0, step: 0.01,  label: 'Accel Dissip' },
+      velocityDissipation:  { value: 0.98, min: 0.9,  max: 1.0, step: 0.001, label: 'Vel Dissipation' },
+      weight1Dissipation:   { value: 0.96,  min: 0.8,  max: 1.0, step: 0.005, label: 'W1 Dissipation' },
+      weight2Dissipation:   { value: 0.30,  min: 0.3,  max: 1.0, step: 0.01,  label: 'W2 Dissipation' },
+      accelDissipation:     { value: 0.80,   min: 0.1,  max: 1.0, step: 0.01,  label: 'Accel Dissip' },
       useNoise:             { value: true,  label: 'Curl Noise' },
       noiseScale:           { value: 0.02,  min: 0.001, max: 0.5, step: 0.001, label: 'Noise Scale' },
       noiseStrength:        { value: 3,     min: 0,    max: 20,  step: 0.1,   label: 'Noise Strength' },
@@ -29,11 +29,11 @@ export default function VelocityPaintRefract() {
       radiusRange:          { value: 100,   min: 10,   max: 500, step: 1,     label: 'Radius Range' },
     }),
     distortion: folder({
-      distortionAmount:  { value: 3,    min: 0,  max: 100, step: 0.5,  label: 'Amount' },
+      distortionAmount:  { value: 100.0,    min: 0,  max: 100, step: 0.5,  label: 'Amount' },
       chromaticShift:    { value: 0.5,  min: 0,  max: 5,   step: 0.1,  label: 'Chromatic Shift' },
       velocityScale:     { value: 5,    min: 0,  max: 20,  step: 0.05, label: 'Velocity Scale' },
-      colorBoost:        { value: 10,   min: 0,  max: 30,  step: 0.1,  label: 'Color Boost' },
-      edgeShade:         { value: 1.25, min: 0,  max: 5,   step: 0.05, label: 'Edge Shade' },
+      colorBoost:        { value: 14.5,   min: 0,  max: 30,  step: 0.1,  label: 'Color Boost' },
+      edgeShade:         { value: 1.65, min: 0,  max: 5,   step: 0.05, label: 'Edge Shade' },
     }),
     backgroundColor: { value: '#11131a', label: 'Background' },
   });
