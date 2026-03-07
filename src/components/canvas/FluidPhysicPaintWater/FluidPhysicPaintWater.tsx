@@ -1,0 +1,263 @@
+'use client';
+
+import { useEffect, useRef, useCallback } from 'react';
+import { useControls, folder } from 'leva';
+import { FluidSimulation } from '../MouseFluid/fluidSimulation';
+
+export default function FluidPhysicPaintWater() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const simRef = useRef<FluidSimulation | null>(null);
+
+  // ── Leva Controls ───────────────────────────────────────
+
+  const controls = useControls('FluidPhysicPaintWater', {
+    fluid: folder({
+      quality: {
+        value: 1024,
+        options: { high: 1024, medium: 512, low: 256, 'very low': 128 },
+        label: 'Quality',
+      },
+      simResolution: {
+        value: 128,
+        options: { '32': 32, '64': 64, '128': 128, '256': 256 },
+        label: 'Sim Resolution',
+      },
+      densityDiffusion:  { value: 18.88, min: 0,   max: 20.0, step: 0.01, label: 'Density Diffusion' },
+      velocityDiffusion: { value: 0.20,  min: 0,   max: 4.0,  step: 0.01, label: 'Velocity Diffusion' },
+      pressure:          { value: 0,     min: 0.0, max: 1.0,  step: 0.01, label: 'Pressure' },
+      vorticity:         { value: 12,    min: 0,   max: 50,   step: 1,    label: 'Vorticity' },
+      splatRadius:       { value: 0,     min: 0,   max: 1.0,  step: 0.01, label: 'Splat Radius' },
+    }),
+    velocitySplat: folder({
+      velocitySplatEnabled: { value: true,  label: 'Velocity Splat' },
+      velocityMaxRadius:    { value: 0.38,  min: 0.01, max: 2.0,  step: 0.01,   label: 'Max Radius' },
+      velocitySensitivity:  { value: 0.03,  min: 0.001, max: 0.1, step: 0.001,  label: 'Sensitivity' },
+      velocitySpeedBoost:   { value: 1.00,  min: 0.001, max: 10.0, step: 0.01,  label: 'Speed Boost' },
+      velocityThreshold:    { value: 0,     min: 0.0, max: 0.01, step: 0.0001,  label: 'Speed Threshold' },
+    }),
+    water: folder({
+      ior:              { value: 2.5,   min: 1.0,  max: 2.5,   step: 0.01,  label: 'IOR' },
+      thickness:        { value: 2.5,   min: 0.0,  max: 10.0,  step: 0.05,  label: 'Thickness' },
+      caSpread:         { value: 0.15,  min: 0.0,  max: 1.0,   step: 0.01,  label: 'CA Spread' },
+      caIntensity:      { value: 2.00,  min: 0.0,  max: 2.0,   step: 0.01,  label: 'CA Intensity' },
+      caEdgeWidth:      { value: 0.20,  min: 0.001, max: 0.2,  step: 0.001, label: 'CA Edge Width' },
+      gradAmp:          { value: 3.0,   min: 1.0,  max: 20.0,  step: 0.1,   label: 'Gradient Amplify' },
+      roughness:        { value: 0.00,  min: 0.0,  max: 1.0,   step: 0.01,  label: 'Roughness' },
+      causticIntensity: { value: 0.50,  min: 0.0,  max: 2.0,   step: 0.01,  label: 'Caustic Intensity' },
+      specPower:        { value: 64,    min: 1.0,  max: 1024.0, step: 1.0,  label: 'Specular Power' },
+      specIntensity:    { value: 0.40,  min: 0.0,  max: 1.0,   step: 0.01,  label: 'Specular Intensity' },
+      fresnelPower:     { value: 10.0,  min: 0.5,  max: 10.0,  step: 0.1,   label: 'Fresnel Power' },
+      fresnelIntensity: { value: 0.50,  min: 0.0,  max: 1.0,   step: 0.01,  label: 'Fresnel Intensity' },
+      lighting3d:       { value: true,  label: '3D Lighting' },
+    }),
+    backgroundColor: { value: '#000000', label: 'Background Color' },
+  });
+
+  // ── Sync Leva → Simulation ──────────────────────────────
+
+  useEffect(() => {
+    const sim = simRef.current;
+    if (!sim) return;
+
+    // Parse background color hex
+    const hex = controls.backgroundColor;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+
+    const needsReinit =
+      sim.config.DYE_RESOLUTION !== controls.quality ||
+      sim.config.SIM_RESOLUTION !== controls.simResolution;
+
+    // Fluid
+    sim.config.DYE_RESOLUTION = controls.quality;
+    sim.config.SIM_RESOLUTION = controls.simResolution;
+    sim.config.DENSITY_DISSIPATION = controls.densityDiffusion;
+    sim.config.VELOCITY_DISSIPATION = controls.velocityDiffusion;
+    sim.config.PRESSURE = controls.pressure;
+    sim.config.CURL = controls.vorticity;
+    sim.config.SPLAT_RADIUS = controls.splatRadius;
+    sim.config.SHADING = true;
+    sim.config.COLORFUL = true;
+
+    // Velocity Splat
+    sim.config.VELOCITY_SPLAT = controls.velocitySplatEnabled;
+    sim.config.VELOCITY_MAX_RADIUS = controls.velocityMaxRadius;
+    sim.config.VELOCITY_SENSITIVITY = controls.velocitySensitivity;
+    sim.config.VELOCITY_SPEED_BOOST = controls.velocitySpeedBoost;
+    sim.config.VELOCITY_THRESHOLD = controls.velocityThreshold;
+
+    // Force TransmissionMaterial2 ON, disable others
+    sim.config.TRANSMISSION1 = false;
+    sim.config.TRANSMISSION2 = true;
+    sim.config.BLOOM = false;
+    sim.config.SUNRAYS = false;
+    sim.config.VP1_ENABLED = false;
+
+    // Water (TransmissionMaterial2) params
+    sim.config.TRANSMISSION2_IOR = controls.ior;
+    sim.config.TRANSMISSION2_THICKNESS = controls.thickness;
+    sim.config.TRANSMISSION2_CA_SPREAD = controls.caSpread;
+    sim.config.TRANSMISSION2_CA_INTENSITY = controls.caIntensity;
+    sim.config.TRANSMISSION2_CA_EDGE_WIDTH = controls.caEdgeWidth;
+    sim.config.TRANSMISSION2_GRAD_AMP = controls.gradAmp;
+    sim.config.TRANSMISSION2_ROUGHNESS = controls.roughness;
+    sim.config.TRANSMISSION2_CAUSTIC_INT = controls.causticIntensity;
+    sim.config.TRANSMISSION2_SPEC_POWER = controls.specPower;
+    sim.config.TRANSMISSION2_SPEC_INTENSITY = controls.specIntensity;
+    sim.config.TRANSMISSION2_FRESNEL_POWER = controls.fresnelPower;
+    sim.config.TRANSMISSION2_FRESNEL_INTENSITY = controls.fresnelIntensity;
+    sim.config.TRANSMISSION2_LIGHTING = controls.lighting3d;
+
+    sim.config.BACK_COLOR = { r, g, b };
+
+    sim.updateKeywords();
+    if (needsReinit) sim.initFramebuffers();
+  }, [controls]);
+
+  // ── Pointer Event Handlers (no click required, like VelocityPaint) ──
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const posX = scaleByPixelRatio(e.clientX - rect.left);
+    const posY = scaleByPixelRatio(e.clientY - rect.top);
+    const pointer = sim.pointers[0];
+    // Auto-activate pointer on first move (no click required)
+    if (!pointer.down) {
+      sim.updatePointerDownData(pointer, -1, posX, posY);
+    }
+    sim.updatePointerMoveData(pointer, posX, posY);
+  }, []);
+
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+    e.preventDefault();
+    const sim = simRef.current;
+    if (!sim) return;
+    const touches = e.targetTouches;
+    while (touches.length >= sim.pointers.length) {
+      sim.pointers.push({
+        id: -1,
+        texcoordX: 0, texcoordY: 0,
+        prevTexcoordX: 0, prevTexcoordY: 0,
+        deltaX: 0, deltaY: 0,
+        down: false, moved: false,
+        color: { r: 30, g: 0, b: 300 },
+      });
+    }
+    for (let i = 0; i < touches.length; i++) {
+      const posX = scaleByPixelRatio(touches[i].pageX);
+      const posY = scaleByPixelRatio(touches[i].pageY);
+      sim.updatePointerDownData(sim.pointers[i + 1], touches[i].identifier, posX, posY);
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    e.preventDefault();
+    const sim = simRef.current;
+    if (!sim) return;
+    const touches = e.targetTouches;
+    for (let i = 0; i < touches.length; i++) {
+      const pointer = sim.pointers[i + 1];
+      if (!pointer || !pointer.down) continue;
+      const posX = scaleByPixelRatio(touches[i].pageX);
+      const posY = scaleByPixelRatio(touches[i].pageY);
+      sim.updatePointerMoveData(pointer, posX, posY);
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback((e: TouchEvent) => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const touches = e.changedTouches;
+    for (let i = 0; i < touches.length; i++) {
+      const pointer = sim.pointers.find(p => p.id === touches[i].identifier);
+      if (pointer) sim.updatePointerUpData(pointer);
+    }
+  }, []);
+
+  // ── Init & Cleanup ──────────────────────────────────────
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const sim = new FluidSimulation(canvas, {
+      // Force TransmissionMaterial2 on from the start
+      TRANSMISSION2: true,
+      TRANSMISSION1: false,
+      BLOOM: false,
+      SUNRAYS: false,
+      VP1_ENABLED: false,
+      // Fluid defaults — ALL values matching Leva defaults
+      DYE_RESOLUTION: 1024,
+      SIM_RESOLUTION: 128,
+      DENSITY_DISSIPATION: 18.88,
+      VELOCITY_DISSIPATION: 0.20,
+      PRESSURE: 0,
+      CURL: 12,
+      SPLAT_RADIUS: 0,
+      SHADING: true,
+      COLORFUL: true,
+      // Velocity Splat defaults
+      VELOCITY_SPLAT: true,
+      VELOCITY_MAX_RADIUS: 0.38,
+      VELOCITY_SENSITIVITY: 0.03,
+      VELOCITY_SPEED_BOOST: 1.00,
+      VELOCITY_THRESHOLD: 0,
+      // Water (TransmissionMaterial2) defaults
+      TRANSMISSION2_IOR: 2.5,
+      TRANSMISSION2_THICKNESS: 2.5,
+      TRANSMISSION2_CA_SPREAD: 0.15,
+      TRANSMISSION2_CA_INTENSITY: 2.00,
+      TRANSMISSION2_CA_EDGE_WIDTH: 0.20,
+      TRANSMISSION2_GRAD_AMP: 3.0,
+      TRANSMISSION2_ROUGHNESS: 0.00,
+      TRANSMISSION2_CAUSTIC_INT: 0.50,
+      TRANSMISSION2_SPEC_POWER: 64,
+      TRANSMISSION2_SPEC_INTENSITY: 0.40,
+      TRANSMISSION2_FRESNEL_POWER: 10.0,
+      TRANSMISSION2_FRESNEL_INTENSITY: 0.50,
+      TRANSMISSION2_LIGHTING: true,
+    });
+    simRef.current = sim;
+
+    // Attach event listeners — mousemove on window (no click required)
+    window.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('touchstart', handleTouchStart);
+    canvas.addEventListener('touchmove', handleTouchMove, false);
+    window.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+      sim.destroy();
+      simRef.current = null;
+      window.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('touchstart', handleTouchStart);
+      canvas.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [handleMouseMove, handleTouchStart, handleTouchMove, handleTouchEnd]);
+
+  // ── Render ──────────────────────────────────────────────
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        width: '100%',
+        height: '100%',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+      }}
+    />
+  );
+}
+
+function scaleByPixelRatio(input: number) {
+  const pixelRatio = window.devicePixelRatio || 1;
+  return Math.floor(input * pixelRatio);
+}

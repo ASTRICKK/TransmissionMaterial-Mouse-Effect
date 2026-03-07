@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useControls, folder } from 'leva';
-import { VelocityPaintShimmerEngine } from './VelocityPaintShimmerEngine';
+import { VelocityPaintOilEngine } from './VelocityPaintOilEngine';
 
-export default function VelocityPaintShimmer() {
+export default function VelocityPaintOil() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<VelocityPaintShimmerEngine | null>(null);
+  const engineRef = useRef<VelocityPaintOilEngine | null>(null);
   const frameRef = useRef(0);
   const lastTimeRef = useRef(0);
   const pausedRef = useRef(false);
@@ -14,29 +14,34 @@ export default function VelocityPaintShimmer() {
 
   // ── Leva Controls ──────────────────────────────────────
 
-  const controls = useControls('VelocityPaintShimmer', {
+  const controls = useControls('VelocityPaintOil', {
     paint: folder({
       pushStrength:         { value: 25,    min: 0,    max: 100, step: 1,     label: 'Push Strength' },
-      velocityDissipation:  { value: 0.975, min: 0.9,  max: 1.0, step: 0.001, label: 'Vel Dissipation' },
-      weight1Dissipation:   { value: 0.95,  min: 0.8,  max: 1.0, step: 0.005, label: 'W1 Dissipation' },
-      weight2Dissipation:   { value: 0.80,  min: 0.3,  max: 1.0, step: 0.01,  label: 'W2 Dissipation' },
-      accelDissipation:     { value: 0.8,   min: 0.1,  max: 1.0, step: 0.01,  label: 'Accel Dissip' },
+      velocityDissipation:  { value: 0.98,  min: 0.9,  max: 1.0, step: 0.001, label: 'Vel Dissipation' },
+      weight1Dissipation:   { value: 0.96,  min: 0.8,  max: 1.0, step: 0.005, label: 'W1 Dissipation' },
+      weight2Dissipation:   { value: 0.85,  min: 0.3,  max: 1.0, step: 0.01,  label: 'W2 Dissipation' },
+      accelDissipation:     { value: 0.75,  min: 0.1,  max: 1.0, step: 0.01,  label: 'Accel Dissip' },
       useNoise:             { value: true,  label: 'Curl Noise' },
       noiseScale:           { value: 0.02,  min: 0.001, max: 0.5, step: 0.001, label: 'Noise Scale' },
-      noiseStrength:        { value: 3,     min: 0,    max: 20,  step: 0.1,   label: 'Noise Strength' },
+      noiseStrength:        { value: 2,     min: 0,    max: 20,  step: 0.1,   label: 'Noise Strength' },
       minRadius:            { value: 0,     min: 0,    max: 50,  step: 1,     label: 'Min Radius' },
       maxRadius:            { value: 100,   min: 10,   max: 500, step: 1,     label: 'Max Radius' },
-      radiusRange:          { value: 100,   min: 10,   max: 500, step: 1,     label: 'Radius Range' },
+      radiusRange:          { value: 80,    min: 10,   max: 500, step: 1,     label: 'Radius Range' },
     }),
-    shimmer: folder({
-      distortionAmount:  { value: 2.5,  min: 0,  max: 100, step: 0.5,  label: 'Distortion' },
-      filmThickness:     { value: 1.8,  min: 0.1, max: 5,  step: 0.05, label: 'Film Thickness' },
-      iridIntensity:     { value: 12,   min: 0,   max: 30, step: 0.5,  label: 'Irid Intensity' },
-      fresnelPower:      { value: 2.5,  min: 0.5, max: 8,  step: 0.1,  label: 'Fresnel Power' },
-      velocityScale:     { value: 5,    min: 0,  max: 20,  step: 0.05, label: 'Velocity Scale' },
-      edgeShade:         { value: 1.5,  min: 0,  max: 5,   step: 0.05, label: 'Edge Shade' },
+    oil: folder({
+      distortionAmount:  { value: 8,     min: 0,   max: 100, step: 0.5,  label: 'Distortion' },
+      filmThickness:     { value: 2.8,   min: 0.1, max: 10,  step: 0.05, label: 'Film Thickness' },
+      iridIntensity:     { value: 5,     min: 0,   max: 15,  step: 0.1,  label: 'Irid Intensity' },
+      fresnelPower:      { value: 2.5,   min: 0.5, max: 8,   step: 0.1,  label: 'Fresnel Power' },
+      flowFreq:          { value: 5,     min: 1,   max: 30,  step: 0.5,  label: 'Flow Freq' },
+      weightFreq:        { value: 1.2,   min: 0.01, max: 6,  step: 0.01, label: 'Weight Freq' },
+      velocityScale:     { value: 8,     min: 0,   max: 20,  step: 0.05, label: 'Velocity Scale' },
+      edgeShade:         { value: 3.5,   min: 0,   max: 5,   step: 0.05, label: 'Edge Shade' },
+      viscosity:         { value: 0.7,   min: 0,   max: 1,   step: 0.01, label: 'Viscosity' },
+      darkness:          { value: 1.5,   min: 0,   max: 3,   step: 0.05, label: 'Darkness' },
+      bgOpacity:         { value: 1,     min: 0,   max: 1,   step: 0.01, label: 'BG Opacity' },
     }),
-    backgroundColor: { value: '#0a0c16', label: 'Background' },
+    backgroundColor: { value: '#040510', label: 'Background' },
   });
 
   // ── Sync Leva → Engine ─────────────────────────────────
@@ -65,8 +70,13 @@ export default function VelocityPaintShimmer() {
     engine.config.filmThickness       = controls.filmThickness;
     engine.config.iridIntensity       = controls.iridIntensity;
     engine.config.fresnelPower        = controls.fresnelPower;
+    engine.config.flowFreq            = controls.flowFreq;
+    engine.config.weightFreq          = controls.weightFreq;
     engine.config.velocityScale       = controls.velocityScale;
     engine.config.edgeShade           = controls.edgeShade;
+    engine.config.viscosity           = controls.viscosity;
+    engine.config.darkness            = controls.darkness;
+    engine.config.bgOpacity           = controls.bgOpacity;
     engine.config.bgColor             = { r, g, b };
   }, [controls]);
 
@@ -112,10 +122,11 @@ export default function VelocityPaintShimmer() {
     const gl = canvas.getContext('webgl2', {
       alpha: true, depth: false, stencil: false,
       antialias: false, preserveDrawingBuffer: false,
+      premultipliedAlpha: false,
     });
     if (!gl) throw new Error('WebGL2 not supported');
 
-    const engine = new VelocityPaintShimmerEngine(gl);
+    const engine = new VelocityPaintOilEngine(gl);
     engine.setDPR(dpr);
     engineRef.current = engine;
 
@@ -164,7 +175,7 @@ export default function VelocityPaintShimmer() {
     const onCtxLost = (e: Event) => { e.preventDefault(); cancelAnimationFrame(frameRef.current); };
     const onCtxRestored = () => {
       const newGl = canvas.getContext('webgl2')!;
-      const newEngine = new VelocityPaintShimmerEngine(newGl);
+      const newEngine = new VelocityPaintOilEngine(newGl);
       newEngine.setDPR(Math.min(window.devicePixelRatio || 1, 2));
       engineRef.current = newEngine;
       lastTimeRef.current = performance.now();

@@ -2,22 +2,22 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { VelocityPaintShimmerEngine } from './VelocityPaintShimmerEngine';
-import type { VPShimmerConfig } from './VelocityPaintShimmerEngine';
+import { VelocityPaintIridescenceEngine } from './VelocityPaintIridescenceEngine';
+import type { VPIridescenceConfig } from './VelocityPaintIridescenceEngine';
 
-interface R3VelocityPaintShimmerProps {
-  config?: Partial<VPShimmerConfig>;
+interface R3VelocityPaintIridescenceProps {
+  config?: Partial<VPIridescenceConfig>;
 }
 
-export default function R3VelocityPaintShimmer({ config }: R3VelocityPaintShimmerProps) {
+export default function R3VelocityPaintIridescence({ config }: R3VelocityPaintIridescenceProps) {
   const { gl, size } = useThree();
-  const engineRef = useRef<VelocityPaintShimmerEngine | null>(null);
+  const engineRef = useRef<VelocityPaintIridescenceEngine | null>(null);
   const rectRef = useRef<DOMRect | null>(null);
 
   // ── Init engine with R3F's GL context ──
   useEffect(() => {
     const glCtx = gl.getContext() as WebGL2RenderingContext;
-    const engine = new VelocityPaintShimmerEngine(glCtx, config);
+    const engine = new VelocityPaintIridescenceEngine(glCtx, config);
     engine.setDPR(gl.getPixelRatio());
     engineRef.current = engine;
 

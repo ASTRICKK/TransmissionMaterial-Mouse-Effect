@@ -1,19 +1,21 @@
 /*
-  VelocityPaintShimmer Engine
-  Thin-film iridescence variant of VelocityPaint.
-  Same velocity-painting pipeline, different compositing shader.
+  VelocityPaintOil Engine
+  True oil-slick effect — very dark, deeply saturated colors
+  (deep purple, dark teal, muted olive) on a near-black base.
+  Uses squared color for darkness, 4-layer interference,
+  wet darkening pass, and viscous pooling distortion.
 */
 
 import { VERT } from './shaders/vert';
 import { PAINT_FRAG, PAINT_FRAG_NOISE, PAINT_FRAG_NOISE_2 } from './shaders/paintFrag';
-import { SHIMMER_FRAG } from './shaders/shimmerFrag';
+import { OIL_FRAG } from './shaders/oilFrag';
 import { BLUR_FRAG } from './shaders/blurFrag';
 import { COPY_FRAG } from './shaders/copyFrag';
 import { BG_FRAG } from './shaders/bgFrag';
 
 // ── Config ────────────────────────────────────────────────
 
-export interface VPShimmerConfig {
+export interface VPOilConfig {
   // Brush / Velocity
   pushStrength: number;
   velocityDissipation: number;
@@ -28,38 +30,48 @@ export interface VPShimmerConfig {
   minRadius: number;
   maxRadius: number;
   radiusRange: number;
-  // Shimmer-specific
+  // Oil-specific
   distortionAmount: number;
   filmThickness: number;
   iridIntensity: number;
   fresnelPower: number;
+  flowFreq: number;
+  weightFreq: number;
   velocityScale: number;
   edgeShade: number;
+  bgOpacity: number;
+  viscosity: number;
+  darkness: number;
   bgColor: { r: number; g: number; b: number };
 }
 
-export const VP_SHIMMER_DEFAULTS: VPShimmerConfig = {
+export const VP_OIL_DEFAULTS: VPOilConfig = {
   pushStrength: 25,
-  velocityDissipation: 0.975,
-  weight1Dissipation: 0.951,
-  weight2Dissipation: 0.803,
-  accelDissipation: 0.8,
+  velocityDissipation: 0.98,
+  weight1Dissipation: 0.96,
+  weight2Dissipation: 0.85,
+  accelDissipation: 0.75,
   velCapture: 0.8,
   useNoise: true,
   doubleOctaveNoise: true,
-  noiseScale: 0.021,
-  noiseStrength: 3,
+  noiseScale: 0.02,
+  noiseStrength: 2,
   minRadius: 0,
   maxRadius: 100,
-  radiusRange: 100,
-  // Shimmer defaults — tuned for soap-bubble / Annihilation feel
-  distortionAmount: 2.5,
-  filmThickness: 1.8,
-  iridIntensity: 12,
-  fresnelPower: 2.5,
-  velocityScale: 5,
-  edgeShade: 1.5,
-  bgColor: { r: 10, g: 12, b: 22 },
+  radiusRange: 80,
+  // Oil defaults — tuned for dark oil-slick look
+  distortionAmount: 8,
+  filmThickness: 2.8,
+  iridIntensity: 5,
+  fresnelPower: 1.8,
+  flowFreq: 5,
+  weightFreq: 1.2,
+  velocityScale: 8,
+  edgeShade: 3.5,
+  bgOpacity: 1,
+  viscosity: 0.7,
+  darkness: 1.5,
+  bgColor: { r: 4, g: 5, b: 10 },
 };
 
 
@@ -138,14 +150,14 @@ function createRenderTarget(gl: WebGL2RenderingContext, w: number, h: number): F
 
 // ── Main Engine ───────────────────────────────────────────
 
-export class VelocityPaintShimmerEngine {
+export class VelocityPaintOilEngine {
   private gl: WebGL2RenderingContext;
-  config: VPShimmerConfig;
+  config: VPOilConfig;
 
   private paintShaderNoise!:  ShaderProgram;
   private paintShaderNoise2!: ShaderProgram;
   private paintShaderFlat!:   ShaderProgram;
-  private shimmerShader!: ShaderProgram;
+  private oilShader!: ShaderProgram;
   private blurShader!: ShaderProgram;
   private copyShader!: ShaderProgram;
   private bgShader!: ShaderProgram;
@@ -184,9 +196,9 @@ export class VelocityPaintShimmerEngine {
   private viewportH = 0;
   private dpr = 1;
 
-  constructor(gl: WebGL2RenderingContext, config?: Partial<VPShimmerConfig>) {
+  constructor(gl: WebGL2RenderingContext, config?: Partial<VPOilConfig>) {
     this.gl = gl;
-    this.config = { ...VP_SHIMMER_DEFAULTS, ...config };
+    this.config = { ...VP_OIL_DEFAULTS, ...config };
 
     gl.getExtension('EXT_color_buffer_float');
     gl.getExtension('OES_texture_float_linear');
@@ -231,12 +243,11 @@ export class VelocityPaintShimmerEngine {
     this.paintShaderNoise  = createShaderProgram(gl, VERT, PAINT_FRAG_NOISE);
     this.paintShaderNoise2 = createShaderProgram(gl, VERT, PAINT_FRAG_NOISE_2);
     this.paintShaderFlat   = createShaderProgram(gl, VERT, PAINT_FRAG);
-    this.shimmerShader    = createShaderProgram(gl, VERT, SHIMMER_FRAG);
-    this.blurShader       = createShaderProgram(gl, VERT, BLUR_FRAG);
-    this.copyShader       = createShaderProgram(gl, VERT, COPY_FRAG);
-    this.bgShader         = createShaderProgram(gl, VERT, BG_FRAG);
+    this.oilShader         = createShaderProgram(gl, VERT, OIL_FRAG);
+    this.blurShader        = createShaderProgram(gl, VERT, BLUR_FRAG);
+    this.copyShader        = createShaderProgram(gl, VERT, COPY_FRAG);
+    this.bgShader          = createShaderProgram(gl, VERT, BG_FRAG);
 
-    // v_scrollDelta is always (0,0) — upload once
     for (const ps of [this.paintShaderNoise, this.paintShaderNoise2, this.paintShaderFlat]) {
       gl.useProgram(ps.program);
       gl.uniform2f(ps.uniforms.v_scrollDelta, 0.0, 0.0);
@@ -420,14 +431,14 @@ export class VelocityPaintShimmerEngine {
       cfg.weight2Dissipation);
     this.drawQuad(this.rtCurr);
 
-    // Downscale + H-blur in single pass
+    // Downscale + H-blur
     gl.useProgram(this.blurShader.program);
     gl.uniform1i(this.blurShader.uniforms.t_input, this.rtCurr.attach(0));
     gl.uniform2f(this.blurShader.uniforms.v_texelSize, this.lowTexelW, this.lowTexelH);
     gl.uniform2f(this.blurShader.uniforms.v_blurDir, 1.0, 0.0);
     this.drawQuad(this.rtLowB);
 
-    // V-blur at low resolution
+    // V-blur
     gl.uniform1i(this.blurShader.uniforms.t_input, this.rtLowB.attach(0));
     gl.uniform2f(this.blurShader.uniforms.v_blurDir, 0.0, 1.0);
     this.drawQuad(this.rtLow);
@@ -435,7 +446,7 @@ export class VelocityPaintShimmerEngine {
     this.hasMoved = false;
   }
 
-  // ── Render Pass (Shimmer) ──────────────────────────────────
+  // ── Render Pass (Oil) ─────────────────────────────────────
 
   private renderPass() {
     const gl = this.gl;
@@ -457,18 +468,23 @@ export class VelocityPaintShimmerEngine {
     this.drawQuad(this.rtScene);
 
     if (this.config.distortionAmount > 0) {
-      gl.useProgram(this.shimmerShader.program);
-      gl.uniform1i(this.shimmerShader.uniforms.t_scene,    this.rtScene.attach(0));
-      gl.uniform1i(this.shimmerShader.uniforms.t_velPaint, this.rtCurr.attach(1));
-      gl.uniform2f(this.shimmerShader.uniforms.v_paintTexel,
+      gl.useProgram(this.oilShader.program);
+      gl.uniform1i(this.oilShader.uniforms.t_scene,    this.rtScene.attach(0));
+      gl.uniform1i(this.oilShader.uniforms.t_velPaint, this.rtCurr.attach(1));
+      gl.uniform2f(this.oilShader.uniforms.v_paintTexel,
         1.0 / this.rtCurr.width, 1.0 / this.rtCurr.height);
-      gl.uniform1f(this.shimmerShader.uniforms.p_stepScale,
+      gl.uniform1f(this.oilShader.uniforms.p_stepScale,
         this.config.distortionAmount * this.config.velocityScale * 0.25);
-      gl.uniform1f(this.shimmerShader.uniforms.p_filmThickness, this.config.filmThickness);
-      gl.uniform1f(this.shimmerShader.uniforms.p_iridIntensity, this.config.iridIntensity);
-      gl.uniform1f(this.shimmerShader.uniforms.p_fresnelPower,  this.config.fresnelPower);
-      gl.uniform1f(this.shimmerShader.uniforms.p_edgeShade,     this.config.edgeShade);
-      gl.uniform1f(this.shimmerShader.uniforms.u_time,          this.now * 0.001);
+      gl.uniform1f(this.oilShader.uniforms.p_filmThickness, this.config.filmThickness);
+      gl.uniform1f(this.oilShader.uniforms.p_iridIntensity, this.config.iridIntensity);
+      gl.uniform1f(this.oilShader.uniforms.p_fresnelPower,  this.config.fresnelPower);
+      gl.uniform1f(this.oilShader.uniforms.p_edgeShade,     this.config.edgeShade);
+      gl.uniform1f(this.oilShader.uniforms.p_flowFreq,      this.config.flowFreq);
+      gl.uniform1f(this.oilShader.uniforms.p_weightFreq,    this.config.weightFreq);
+      gl.uniform1f(this.oilShader.uniforms.p_bgOpacity,     this.config.bgOpacity);
+      gl.uniform1f(this.oilShader.uniforms.p_time,          this.now * 0.001);
+      gl.uniform1f(this.oilShader.uniforms.p_viscosity,     this.config.viscosity);
+      gl.uniform1f(this.oilShader.uniforms.p_darkness,      this.config.darkness);
       this.drawQuad(null);
     } else {
       gl.useProgram(this.copyShader.program);
@@ -479,12 +495,10 @@ export class VelocityPaintShimmerEngine {
 
   // ── Public API ─────────────────────────────────────────────
 
-  /** Set the output framebuffer (null = default/screen) */
   setOutputFramebuffer(fbo: WebGLFramebuffer | null) {
     this.outputFBO = fbo;
   }
 
-  /** Update + render one frame. Caller drives the loop. */
   update(dt: number, now?: number) {
     if (this.disposed || !this.rtReady) return;
     this.now = now ?? performance.now();
@@ -493,7 +507,6 @@ export class VelocityPaintShimmerEngine {
     this.renderPass();
   }
 
-  /** Reset cursor tracking (call on mouseenter, tab-switch, etc.) */
   resetCursorState() {
     this.initialized = false;
     this.hasMoved    = false;
@@ -503,8 +516,6 @@ export class VelocityPaintShimmerEngine {
     this.segTo.x   = this.segTo.y   = this.segTo.z   = this.segTo.w   = 0;
     this.settleFrames = 2;
   }
-
-  // ── Cursor API ────────────────────────────────────────────
 
   onMove(clientX: number, clientY: number, rect: DOMRect) {
     this.cursorPixX = (clientX - rect.left) * this.dpr;
@@ -518,8 +529,6 @@ export class VelocityPaintShimmerEngine {
     this.dpr = dpr;
   }
 
-  // ── Dispose ───────────────────────────────────────────────
-
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
@@ -530,7 +539,7 @@ export class VelocityPaintShimmerEngine {
     gl.deleteProgram(this.paintShaderNoise.program);
     gl.deleteProgram(this.paintShaderNoise2.program);
     gl.deleteProgram(this.paintShaderFlat.program);
-    gl.deleteProgram(this.shimmerShader.program);
+    gl.deleteProgram(this.oilShader.program);
     gl.deleteProgram(this.blurShader.program);
     gl.deleteProgram(this.copyShader.program);
     gl.deleteProgram(this.bgShader.program);

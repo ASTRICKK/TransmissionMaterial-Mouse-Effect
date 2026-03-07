@@ -1,8 +1,12 @@
 export { default as VelocityPaintRefract } from './VelocityPaintRefract';
 export { default as R3VelocityPaintRefract } from './R3VelocityPaintRefract';
-export { default as VelocityPaintShimmer } from './VelocityPaintShimmer';
-export { default as R3VelocityPaintShimmer } from './R3VelocityPaintShimmer';
+export { default as VelocityPaintIridescence } from './VelocityPaintIridescence';
+export { default as R3VelocityPaintIridescence } from './R3VelocityPaintIridescence';
+export { default as VelocityPaintOil } from './VelocityPaintOil';
+export { default as R3VelocityPaintOil } from './R3VelocityPaintOil';
 export { VelocityPaintEngine, VP_DEFAULTS } from './velocityPaintEngine';
-export { VelocityPaintShimmerEngine, VP_SHIMMER_DEFAULTS } from './VelocityPaintShimmerEngine';
+export { VelocityPaintIridescenceEngine, VP_IRIDESCENCE_DEFAULTS } from './VelocityPaintIridescenceEngine';
+export { VelocityPaintOilEngine, VP_OIL_DEFAULTS } from './VelocityPaintOilEngine';
 export type { VPConfig } from './velocityPaintEngine';
-export type { VPShimmerConfig } from './VelocityPaintShimmerEngine';
+export type { VPIridescenceConfig } from './VelocityPaintIridescenceEngine';
+export type { VPOilConfig } from './VelocityPaintOilEngine';
